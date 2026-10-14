@@ -1,0 +1,443 @@
+<title>Ten by Ten</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Ten by Ten">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&display=swap">
+<style>
+/* Layout: one-screen phone app. Score strip on top, square 10x10 board, three-slot tray below. */
+/* Always dark: colours sampled from the reference image. */
+:root {
+  --bg: #1c1c1c;        /* page background */
+  --well: #363636;      /* empty grid square */
+  --ink: #f2f2f2;
+  --muted: #8a8a8a;
+  --accent: #5e74e2;    /* current score, buttons */
+  --gold: #fec246;      /* best score */
+  --shade: rgba(0, 0, 0, .55);
+  --lose: #ea685a;      /* game-over band */
+  --white: #ffffff;
+  --dim: rgba(0, 0, 0, .6);
+  /* piece colours, one per shape */
+  --p1: #7a89c1;  /* single square */
+  --p2: #ffc63d;  /* 2-line */
+  --p3: #ec9548;  /* 3-line */
+  --p4: #e86a83;  /* 4-line */
+  --p5: #dc6555;  /* 5-line */
+  --p6: #9adc56;  /* 2x2 */
+  --p7: #4cd5b1;  /* 3x3 */
+  --p8: #59cb87;  /* small L */
+  --p9: #5dbee4;  /* big L */
+  --display: "Bricolage Grotesque", ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+  --body: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+
+html, body { height: 100%; }
+[hidden] { display: none !important; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--body);
+  overflow: hidden; overscroll-behavior: none;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+#app { height: 100%; position: relative; overflow: hidden; touch-action: none; }
+
+/* The stage copies the reference screenshot: 590 x 885 units, scaled by --k to fit the screen.
+   Every position below is that screenshot's pixel measurement times --k. */
+#stage {
+  position: absolute; left: 50%; top: var(--top); translate: -50% 0;
+  width: calc(var(--k) * 590px); height: calc(var(--k) * 885px);
+}
+header b {
+  position: absolute; left: 0; right: 0; text-align: center; translate: 0 -50%;
+  font-family: var(--display); line-height: 1; font-variant-numeric: tabular-nums;
+}
+#best { top: calc(var(--k) * 20px); font-size: calc(var(--k) * 30px); font-weight: 500; color: var(--gold); }
+#score { top: calc(var(--k) * 101px); font-size: calc(var(--k) * 66px); font-weight: 800; color: var(--accent); }
+
+#board {
+  position: absolute; left: calc(var(--k) * 27px); top: calc(var(--k) * 169px);
+  width: var(--bw); height: var(--bw); gap: var(--gap);
+  display: grid; grid-template-columns: repeat(10, 1fr); grid-template-rows: repeat(10, 1fr);
+}
+.cell { border-radius: var(--rad); background: var(--well); position: relative; }
+.cell.on::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; background: var(--c);
+}
+/* Cleared blocks shrink away, starting next to the piece just placed (--d is the delay). */
+.cell.pop::after { animation: shrink .24s ease-in var(--d, 0ms) forwards; }
+@keyframes shrink { to { transform: scale(0); } }
+.fcell, .tcell { background: var(--c); }
+
+#tray {
+  position: absolute; left: calc(var(--k) * 11px); top: calc(var(--k) * 717px);
+  width: calc(var(--k) * 567px); height: calc(var(--k) * 170px);
+  display: grid; grid-template-columns: repeat(3, 1fr);
+}
+.slot { display: grid; place-items: center; cursor: grab; }
+.piece { display: grid; gap: var(--tgap); transition: transform .15s, opacity .15s; }
+.tcell { width: var(--tc); height: var(--tc); border-radius: calc(var(--rad) * .62); }
+.slot.held .piece { opacity: 0; }
+.piece.enter { animation: enter .28s cubic-bezier(.2,1.4,.4,1) backwards; }
+@keyframes enter { from { transform: scale(.4); opacity: 0; } }
+
+/* The dragged piece. Its size is set with `scale` and its position with `translate`,
+   so the size can ease while the position follows the finger instantly. */
+#float {
+  position: fixed; left: 0; top: 0; display: grid; gap: var(--gap); pointer-events: none; z-index: 5;
+  transition: scale .14s ease-out;
+}
+#float.settle { transition: translate .17s cubic-bezier(.3, .7, .4, 1); }
+/* While held, each square shrinks inside its own grid-sized slot, so it lines up with the board squares. */
+.fcell { width: var(--cell); height: var(--cell); border-radius: var(--rad); scale: var(--fs, 1); }
+#float.settle .fcell { transition: scale .17s cubic-bezier(.3, .7, .4, 1); }
+
+/* Game over: dim the board, a full-width band slides up from below. */
+#over {
+  position: absolute; inset: 0; display: grid; align-items: center;
+  background: var(--dim); z-index: 10; overflow: hidden;
+  animation: dim-in .3s ease-out backwards;
+}
+@keyframes dim-in { from { background: transparent; } }
+.band {
+  background: var(--lose); padding-block: 36px 32px;
+  display: flex; flex-direction: column; align-items: center; gap: 24px;
+  animation: band-up .3s cubic-bezier(.2, .9, .3, 1.05) .05s backwards;
+}
+@keyframes band-up { from { transform: translateY(100vh); } }
+#over.leaving { animation: dim-out .28s ease-in forwards; }
+#over.leaving .band { animation: band-down .28s cubic-bezier(.55, 0, .8, .3) forwards; }
+@keyframes dim-out { to { background: transparent; } }
+@keyframes band-down { to { transform: translateY(100vh); } }
+.sad { width: 100px; height: 100px; }
+#again {
+  font: 800 18px var(--display); color: var(--lose); background: var(--white);
+  border: 0; border-radius: 999px; padding: 12px 40px; touch-action: manipulation; cursor: pointer;
+}
+#again:focus-visible { outline: 3px solid var(--white); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition: none !important; }
+}
+</style>
+
+<div id="app">
+  <div id="stage">
+    <header><b id="best">0</b><b id="score">0</b></header>
+    <div id="board"></div>
+    <div id="tray"></div>
+  </div>
+  <div id="over" hidden>
+    <div class="band">
+      <svg class="sad" viewBox="0 0 100 100" aria-label="Game over" role="img">
+        <circle cx="50" cy="50" r="50" fill="var(--white)"/>
+        <circle cx="34" cy="38" r="6.5" fill="var(--lose)"/>
+        <circle cx="66" cy="38" r="6.5" fill="var(--lose)"/>
+        <path d="M28 76 Q50 54 72 76" fill="none" stroke="var(--lose)" stroke-width="6.5" stroke-linecap="round"/>
+      </svg>
+      <button id="again" type="button">Try again</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const N = 10;
+  const $ = (id) => document.getElementById(id);
+  const boardEl = $('board'), trayEl = $('tray'), app = $('app');
+
+  // ---------- Piece set (no rotation; each orientation is its own piece) ----------
+  const SHAPES = [];
+  const add = (cells, color) => SHAPES.push({ cells, color });
+  add([[0,0]], 1);
+  for (const n of [2,3,4,5]) {
+    const color = n; // 2..5
+    add(Array.from({length: n}, (_, i) => [0, i]), color);
+    add(Array.from({length: n}, (_, i) => [i, 0]), color);
+  }
+  add([[0,0],[0,1],[1,0],[1,1]], 6);
+  add([[0,0],[0,1],[0,2],[1,0],[1,1],[1,2],[2,0],[2,1],[2,2]], 7);
+  // small L: 2x2 minus one corner
+  for (const skip of [0,1,2,3]) {
+    add([[0,0],[0,1],[1,0],[1,1]].filter((_, i) => i !== skip), 8);
+  }
+  // big L: two 3-long arms meeting at a corner
+  const bigL = [
+    [[0,0],[0,1],[0,2],[1,0],[2,0]],
+    [[0,0],[0,1],[0,2],[1,2],[2,2]],
+    [[0,0],[1,0],[2,0],[2,1],[2,2]],
+    [[0,2],[1,2],[2,2],[2,1],[2,0]],
+  ];
+  for (const s of bigL) add(s, 9);
+  for (const s of SHAPES) {
+    s.h = Math.max(...s.cells.map(c => c[0])) + 1;
+    s.w = Math.max(...s.cells.map(c => c[1])) + 1;
+  }
+  const randomPiece = () => Math.floor(Math.random() * SHAPES.length);
+
+  // ---------- State ----------
+  let board, tray, score, best = 0, over = false;
+  const loadBest = () => { try { return +localStorage.getItem('tbt-best') || 0; } catch { return 0; } };
+  const saveBest = () => { try { localStorage.setItem('tbt-best', best); } catch {} };
+
+  function newGame() {
+    board = Array(N * N).fill(0);
+    tray = [randomPiece(), randomPiece(), randomPiece()];
+    score = 0; over = false;
+    renderAll(true);
+  }
+
+  const fits = (shape, r, c, b = board) =>
+    shape.cells.every(([dr, dc]) => {
+      const rr = r + dr, cc = c + dc;
+      return rr >= 0 && cc >= 0 && rr < N && cc < N && !b[rr * N + cc];
+    });
+  const fitsAnywhere = (shape) => {
+    for (let r = 0; r <= N - shape.h; r++)
+      for (let c = 0; c <= N - shape.w; c++)
+        if (fits(shape, r, c)) return true;
+    return false;
+  };
+  function fullLines(b) {
+    const rows = [], cols = [];
+    for (let i = 0; i < N; i++) {
+      let rf = true, cf = true;
+      for (let j = 0; j < N; j++) {
+        if (!b[i * N + j]) rf = false;
+        if (!b[j * N + i]) cf = false;
+      }
+      if (rf) rows.push(i);
+      if (cf) cols.push(i);
+    }
+    return { rows, cols };
+  }
+  const lineCells = ({ rows, cols }) => {
+    const set = new Set();
+    for (const r of rows) for (let c = 0; c < N; c++) set.add(r * N + c);
+    for (const c of cols) for (let r = 0; r < N; r++) set.add(r * N + c);
+    return set;
+  };
+
+  // ---------- Layout ----------
+  let cellPx = 30, stepPx = 33, trayCell = 16;
+  // Measurements from the reference screenshot (590 px wide): board 535 wide with 3.5 gaps,
+  // tray squares 0.615 of a board square, empty space split 232 above / 163 below the stage.
+  function layout() {
+    const W = app.clientWidth, H = app.clientHeight;
+    const k = Math.min(W / 590, H / 960, 1);
+    const bw = 535 * k, gap = 3.5 * k;
+    cellPx = (bw - 9 * gap) / 10;
+    stepPx = cellPx + gap;
+    trayCell = cellPx * 0.615;
+    const top = Math.max(0, (H - 885 * k) * 232 / 395);
+    const s = document.documentElement.style;
+    s.setProperty('--k', k);
+    s.setProperty('--top', top + 'px');
+    s.setProperty('--bw', bw + 'px');
+    s.setProperty('--gap', gap + 'px');
+    s.setProperty('--cell', cellPx + 'px');
+    s.setProperty('--rad', cellPx * 0.12 + 'px');
+    s.setProperty('--tc', trayCell + 'px');
+    s.setProperty('--tgap', trayCell * 0.08 + 'px');
+  }
+
+  // ---------- Rendering ----------
+  const cells = [];
+  for (let i = 0; i < N * N; i++) {
+    const d = document.createElement('div');
+    d.className = 'cell';
+    boardEl.appendChild(d);
+    cells.push(d);
+  }
+  const colorVar = (k) => `var(--p${k})`;
+
+  function renderBoard() {
+    for (let i = 0; i < N * N; i++) {
+      const d = cells[i], v = board[i];
+      d.className = 'cell' + (v ? ' on' : '');
+      d.style.removeProperty('--d');
+      if (v) d.style.setProperty('--c', colorVar(v));
+      else d.style.removeProperty('--c');
+    }
+  }
+
+  function renderTray(animate = false) {
+    trayEl.innerHTML = '';
+    tray.forEach((p, i) => {
+      const slot = document.createElement('div');
+      slot.className = 'slot';
+      slot.dataset.i = i;
+      if (p != null) {
+        const s = SHAPES[p];
+        const el = document.createElement('div');
+        el.className = 'piece' + (animate ? ' enter' : '');
+        if (animate) el.style.animationDelay = (i * 60) + 'ms';
+        el.style.gridTemplateColumns = `repeat(${s.w}, var(--tc))`;
+        el.style.gridTemplateRows = `repeat(${s.h}, var(--tc))`;
+        for (const [r, c] of s.cells) {
+          const t = document.createElement('div');
+          t.className = 'tcell';
+          t.style.gridArea = `${r + 1} / ${c + 1}`;
+          t.style.setProperty('--c', colorVar(s.color));
+          el.appendChild(t);
+        }
+        slot.appendChild(el);
+        slot.addEventListener('pointerdown', startDrag);
+      }
+      trayEl.appendChild(slot);
+    });
+  }
+
+  function renderScore() {
+    $('score').textContent = score;
+    $('best').textContent = best;
+  }
+
+  function renderAll(animateTray = false) {
+    renderBoard();
+    renderTray(animateTray);
+    renderScore();
+    const ov = $('over');
+    if (over) ov.hidden = false;
+    else if (!ov.classList.contains('leaving')) ov.hidden = true;
+  }
+
+  // ---------- Dragging ----------
+  const DRAG_SCALE = 0.88;   // held squares are a bit smaller than the grid squares
+  let drag = null, settling = false;
+  const floatEl = document.createElement('div');
+  floatEl.id = 'float';
+  floatEl.hidden = true;
+  document.body.appendChild(floatEl);
+
+  function startDrag(e) {
+    if (drag || over || settling) return;
+    const i = +e.currentTarget.dataset.i;
+    if (tray[i] == null) return;
+    e.preventDefault();
+    const s = SHAPES[tray[i]];
+    floatEl.innerHTML = '';
+    floatEl.style.gridTemplateColumns = `repeat(${s.w}, var(--cell))`;
+    floatEl.style.gridTemplateRows = `repeat(${s.h}, var(--cell))`;
+    for (const [r, c] of s.cells) {
+      const t = document.createElement('div');
+      t.className = 'fcell';
+      t.style.gridArea = `${r + 1} / ${c + 1}`;
+      t.style.setProperty('--c', colorVar(s.color));
+      floatEl.appendChild(t);
+    }
+    floatEl.style.setProperty('--fs', DRAG_SCALE);
+    floatEl.hidden = false;
+    e.currentTarget.classList.add('held');
+    const w = s.w * stepPx - (stepPx - cellPx), h = s.h * stepPx - (stepPx - cellPx);
+    // On touch, lift the piece above the finger so it stays visible.
+    const lift = e.pointerType === 'mouse' ? h / 2 : h + cellPx * 1.2;
+    drag = { i, s, slot: e.currentTarget, id: e.pointerId, w, h, lift, at: null };
+    // Grow from the tray size to the board's spacing.
+    floatEl.style.scale = String(trayCell / cellPx);
+    moveDrag(e);
+    floatEl.getBoundingClientRect();
+    floatEl.style.scale = '1';
+  }
+
+  function moveDrag(e) {
+    if (!drag || e.pointerId !== drag.id) return;
+    // (x, y) is the top-left of the piece, laid out on the board's spacing.
+    const x = e.clientX - drag.w / 2, y = e.clientY - drag.lift;
+    floatEl.style.translate = `${x}px ${y}px`;
+    const o = cells[0].getBoundingClientRect();
+    const c = Math.round((x - o.left) / stepPx), r = Math.round((y - o.top) / stepPx);
+    drag.at = fits(drag.s, r, c) ? [r, c] : null;
+  }
+
+  function endDrag(e) {
+    if (!drag || e.pointerId !== drag.id) return;
+    const d = drag;
+    drag = null;
+    if (!d.at) {
+      floatEl.hidden = true;
+      d.slot.classList.remove('held');
+      return;
+    }
+    // Ease the piece onto its squares while each square grows back to full size, then place it.
+    const [r, c] = d.at;
+    const o = cells[0].getBoundingClientRect();
+    settling = true;
+    floatEl.classList.add('settle');
+    floatEl.style.translate = `${o.left + c * stepPx}px ${o.top + r * stepPx}px`;
+    floatEl.style.setProperty('--fs', 1);
+    setTimeout(() => {
+      floatEl.hidden = true;
+      floatEl.classList.remove('settle');
+      settling = false;
+      place(d.i, d.s, r, c);
+    }, 180);
+  }
+
+  window.addEventListener('pointermove', moveDrag, { passive: true });
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', endDrag);
+
+  // ---------- Placing and scoring ----------
+  function place(i, s, r, c) {
+    for (const [dr, dc] of s.cells) board[(r + dr) * N + (c + dc)] = s.color;
+    tray[i] = null;
+    let gained = s.cells.length;
+    const lines = fullLines(board);
+    const n = lines.rows.length + lines.cols.length;
+    const clear = lineCells(lines);
+    renderBoard();
+    let last = 0;
+    if (n) {
+      gained += 10 * n * (n + 1) / 2;   // 1 line 10, 2 lines 30, 3 lines 60...
+      // Each cleared block waits by its distance from the nearest block of the placed piece.
+      const placed = s.cells.map(([dr, dc]) => [r + dr, c + dc]);
+      clear.forEach(k => {
+        const kr = Math.floor(k / N), kc = k % N;
+        const dist = Math.min(...placed.map(([pr, pc]) => Math.abs(pr - kr) + Math.abs(pc - kc)));
+        const delay = dist * 35;
+        last = Math.max(last, delay);
+        cells[k].style.setProperty('--d', delay + 'ms');
+        cells[k].classList.add('pop');
+        board[k] = 0;
+      });
+      setTimeout(renderBoard, last + 260);
+    }
+    score += gained;
+    if (score > best) { best = score; saveBest(); }
+
+    const refill = tray.every(p => p == null);
+    if (refill) tray = [randomPiece(), randomPiece(), randomPiece()];
+    over = !tray.some(p => p != null && fitsAnywhere(SHAPES[p]));
+    renderTray(refill);
+    renderScore();
+    if (over) setTimeout(() => renderAll(), last + 600);
+  }
+
+  // ---------- Controls ----------
+  // Try again: the band slides back down and uncovers the new, empty board.
+  $('again').addEventListener('click', () => {
+    const ov = $('over');
+    if (ov.classList.contains('leaving')) return;
+    ov.classList.add('leaving');
+    newGame();
+    setTimeout(() => { ov.classList.remove('leaving'); ov.hidden = !over; }, 300);
+  });
+  window.addEventListener('resize', layout);
+
+  // ---------- Boot ----------
+  function start(data) {
+    layout();
+    best = Math.max(loadBest(), data.best || 0);
+    if (data.board && data.tray) {
+      board = data.board; tray = data.tray; score = data.score || 0;
+      over = !tray.some(p => p != null && fitsAnywhere(SHAPES[p]));
+      renderAll();
+    } else {
+      newGame();
+    }
+  }
+  window.claude?.hot?.snapshot?.(() => ({ board, tray, score, best }));
+  window.claude?.hot?.ready ? window.claude.hot.ready(start) : start(window.claude?.hot?.data ?? {});
+})();
+</script>
